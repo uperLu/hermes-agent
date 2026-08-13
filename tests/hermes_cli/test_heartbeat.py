@@ -4,6 +4,7 @@ import time
 
 import pytest
 
+import hermes_cli.heartbeat as heartbeat
 from hermes_cli.heartbeat import (
     HeartbeatManager,
     HeartbeatState,
@@ -154,6 +155,23 @@ def test_missed_ticks_coalesce():
     mgr.state.created_at = time.time() - 600 * 5 - 10
     assert mgr.due_prompt() is not None
     assert mgr.due_prompt() is None
+    assert mgr.state.fire_count == 1
+
+
+def test_due_prompt_waits_for_durable_reanchor(monkeypatch):
+    mgr = HeartbeatManager(session_id="hb-durable-anchor-sid")
+    mgr.set("tick", 600)
+    due_at = mgr.state.created_at + 601
+    original_save = heartbeat.save_heartbeat
+
+    monkeypatch.setattr(heartbeat, "save_heartbeat", lambda *_args: False)
+    assert mgr.due_prompt(now=due_at) is None
+    assert mgr.state.last_fired_at == 0.0
+    assert mgr.state.fire_count == 0
+
+    monkeypatch.setattr(heartbeat, "save_heartbeat", original_save)
+    assert mgr.due_prompt(now=due_at) is not None
+    assert mgr.state.last_fired_at == due_at
     assert mgr.state.fire_count == 1
 
 

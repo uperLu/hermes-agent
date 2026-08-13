@@ -179,16 +179,19 @@ def load_heartbeat(session_id: str) -> Optional[HeartbeatState]:
     return None if state.status == "cleared" else state
 
 
-def save_heartbeat(session_id: str, state: HeartbeatState) -> None:
+def save_heartbeat(session_id: str, state: HeartbeatState) -> bool:
+    """Persist a heartbeat and report whether the write reached SessionDB."""
     if not session_id:
-        return
+        return False
     db = _get_session_db()
     if db is None:
-        return
+        return False
     try:
         db.set_meta(_meta_key(session_id), state.to_json())
+        return True
     except Exception as exc:
         logger.debug("HeartbeatManager: set_meta failed: %s", exc)
+        return False
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -289,9 +292,17 @@ class HeartbeatManager:
         s = self._state
         if s is None or not s.is_due(now):
             return None
+        previous_last_fired_at = s.last_fired_at
+        previous_fire_count = s.fire_count
         s.last_fired_at = now if now is not None else time.time()
         s.fire_count += 1
-        save_heartbeat(self.session_id, s)
+        # The gateway creates a manager for each poll.  Do not inject a
+        # heartbeat until its new anchor is durable; otherwise the next poll
+        # reloads the stale anchor and enqueues the same missed tick again.
+        if not save_heartbeat(self.session_id, s):
+            s.last_fired_at = previous_last_fired_at
+            s.fire_count = previous_fire_count
+            return None
         return s.render_prompt()
 
 
